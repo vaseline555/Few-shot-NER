@@ -7,13 +7,13 @@ from . import word_encoder
 from . import data_loader
 import torch
 from torch import autograd, optim, nn
-from torch.autograd import Variable
 from torch.nn import functional as F
-# from pytorch_pretrained_bert import BertAdam
 from transformers import AdamW, get_linear_schedule_with_warmup
-from torch.nn.parallel import DistributedDataParallel as DDP
 
 from .viterbi import ViterbiDecoder
+
+import umap
+import matplotlib.pyplot as plt
 
 
 def get_abstract_transitions(train_fname, use_sampled_data=True):
@@ -284,7 +284,6 @@ class FewShotNERModel(nn.Module):
 
 
 class FewShotNERFramework:
-
     def __init__(self, train_data_loader, val_data_loader, test_data_loader, viterbi=False, N=None, train_fname=None, tau=0.05, use_sampled_data=True):
         '''
         train_data_loader: DataLoader for training.
@@ -304,6 +303,7 @@ class FewShotNERFramework:
         ckpt: Path of the checkpoint
         return: Checkpoint dict
         '''
+        print(os.getcwd())
         if os.path.isfile(ckpt):
             checkpoint = torch.load(ckpt)
             print("Successfully loaded checkpoint '%s'" % ckpt)
@@ -401,7 +401,7 @@ class FewShotNERFramework:
                             query[k] = query[k].cuda()
                     label = label.cuda()
 
-                logits, pred = model(support, query)
+                logits, pred, _, _ = model(support, query)
                 assert logits.shape[0] == label.shape[0], print(logits.shape, label.shape)
                 loss = model.loss(logits, label) / float(grad_iter)
                 tmp_pred_cnt, tmp_label_cnt, correct = model.metrics_by_entity(pred, label)
@@ -478,10 +478,7 @@ class FewShotNERFramework:
                 pred.append(label-1)
         return torch.tensor(pred).cuda()
 
-    def eval(self,
-            model,
-            eval_iter,
-            ckpt=None): 
+    def eval(self, model, eval_iter, ckpt=None): 
         '''
         model: a FewShotREModel instance
         B: Batch size
@@ -533,7 +530,61 @@ class FewShotNERFramework:
                                 support[k] = support[k].cuda()
                                 query[k] = query[k].cuda()
                         label = label.cuda()
-                    logits, pred = model(support, query)
+                    logits, pred, proto, embs = model(support, query)
+                    
+                    # plot embedding per each batch
+                    prev_num_sent = 0
+                    prev_num_label = 0
+                    for batch_idx in range(len(proto)):
+                        curr_num_sent = len(embs[batch_idx])
+                        curr_mask = query['text_mask'][prev_num_sent:prev_num_sent + curr_num_sent].bool()
+                        
+                        # get current prototypes
+                        curr_proto = proto[batch_idx]
+                        
+                        # get current embedding
+                        curr_emb = torch.masked_select(embs[batch_idx], curr_mask.unsqueeze(-1)).reshape(-1, 768)
+                        
+                        # get current label
+                        curr_num_label = len(curr_emb)
+                        curr_label = label[prev_num_label:prev_num_label + curr_num_label]
+                        
+                        # get current prediction
+                        curr_pred = pred[prev_num_label:prev_num_label + curr_num_label]
+                        
+                        # udpate each index
+                        prev_num_sent += curr_num_sent
+                        prev_num_label += curr_num_label
+                       
+                        # plot embedding in t-SNE
+                        ## filter out embedding, predictions, labels where label != -1
+                        curr_emb = curr_emb[curr_label != -1]
+                        curr_pred = curr_pred[curr_label != -1].detach().cpu().numpy()
+                        curr_label = curr_label[curr_label != -1].detach().cpu().numpy()
+                        
+                        ## convert label to tag
+                        curr_tag = query['label2tag'][batch_idx]
+                        curr_pred_tag = [curr_tag[p.item()] for p in curr_pred]
+                        curr_label_tag = [curr_tag[l.item()] for l in curr_label]
+                        
+                        ## get shrunken embedding
+                        sh_all = torch.cat([curr_proto, curr_emb], dim=0)
+                        emb_sh_all = umap.UMAP(n_components=2).fit_transform(sh_all.detach().cpu().numpy())
+                        curr_proto_sh, curr_emb_sh = emb_sh_all[:len(curr_proto)], emb_sh_all[len(curr_proto):]
+                        
+                        fig, ax = plt.subplots(figsize=(15, 15))
+                        for g in np.unique(curr_label):
+                            idx_label = np.where(curr_label == g)
+                            idx_pred = np.where(curr_pred == g)
+                            ax.scatter(x=curr_emb_sh[:, 0][idx_label], y=curr_emb_sh[:, 1][idx_label], s=1e2, alpha=0.8, label=curr_tag[g])
+                        ax.scatter(x=curr_emb_sh[:, 0], y=curr_emb_sh[:, 1], s=5e2, alpha=0.5, c=curr_label != curr_pred, marker='+') 
+                        ax.legend()
+                        ax.plot(curr_proto_sh[:, 0], curr_proto_sh[:, 1], 'ro', markersize=100, alpha=0.1)
+                        for idx, (x, y) in enumerate(curr_proto_sh):
+                            ax.annotate([str(proto_name) for proto_name in curr_tag.values()][idx],  xy=(x - 0.05, y - 0.05))
+                        plt.savefig(f'./plot/query_it_{str(it).zfill(3)}_batch_{str(batch_idx).zfill(3)}.png')
+                        plt.close()
+                        
                     if self.viterbi:
                         pred = self.viterbi_decode(logits, query['label'])
 

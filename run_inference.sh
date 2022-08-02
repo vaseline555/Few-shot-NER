@@ -1,0 +1,1 @@
+python3 train_demo.py  --mode inter --lr 1e-4 --batch_size 8 --trainN 5 --N 5 --K 1 --Q 1 --train_iter 10000 --val_iter 500 --test_iter 5000 --val_step 1000 --max_length 64 --model proto --only_test --load_ckpt checkpoint/proto-inter-5-1-seed0.pth.tar

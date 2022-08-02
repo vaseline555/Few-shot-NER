@@ -50,8 +50,6 @@ class Proto(util.framework.FewShotNERModel):
 
         # Prototypical Networks
         logits = []
-        proto = []
-        embs = []
         current_support_num = 0
         current_query_num = 0
         assert support_emb.size()[:2] == support['mask'].size()
@@ -64,20 +62,16 @@ class Proto(util.framework.FewShotNERModel):
                 support_emb[current_support_num:current_support_num+sent_support_num], 
                 support['label'][current_support_num:current_support_num+sent_support_num], 
                 support['text_mask'][current_support_num: current_support_num+sent_support_num])
-            
             # calculate distance to each prototype
             logits.append(self.__batch_dist__(
                 support_proto, 
-                query_emb[current_query_num:current_query_num+sent_query_num], # [sentence_num (N-way), max_length, embedding_dim]
+                query_emb[current_query_num:current_query_num+sent_query_num],
                 query['text_mask'][current_query_num: current_query_num+sent_query_num])) # [num_of_query_tokens, class_num]
-            proto.append(support_proto)
-            embs.append(query_emb[current_query_num:current_query_num+sent_query_num])
             current_query_num += sent_query_num
             current_support_num += sent_support_num
         logits = torch.cat(logits, 0)
         _, pred = torch.max(logits, 1)
-        proto = torch.stack(proto, 0) # save epoisode-wise prototypes
-        return logits, pred, proto, embs
+        return logits, pred
 
     
     
