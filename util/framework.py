@@ -582,7 +582,7 @@ class FewShotNERFramework:
                         ax.plot(curr_proto_sh[:, 0], curr_proto_sh[:, 1], 'ro', markersize=100, alpha=0.1)
                         for idx, (x, y) in enumerate(curr_proto_sh):
                             ax.annotate([str(proto_name) for proto_name in curr_tag.values()][idx],  xy=(x - 0.05, y - 0.05))
-                        plt.savefig(f'./plot/query_it_{str(it).zfill(3)}_batch_{str(batch_idx).zfill(3)}.png')
+                        plt.savefig(f'./plot/query_it_{str(it).zfill(5)}_batch_{str(batch_idx).zfill(2)}.png')
                         plt.close()
                         
                     if self.viterbi:
