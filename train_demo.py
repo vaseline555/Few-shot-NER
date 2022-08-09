@@ -154,7 +154,7 @@ def main():
         framework = FewShotNERFramework(train_data_loader, val_data_loader, test_data_loader, N=opt.N, tau=opt.tau, train_fname=opt.train, viterbi=True, use_sampled_data=opt.use_sampled_data)
     elif model_name == 'collapsedproto':
         print('use CollapsedPrOTo')
-        model = CollapsedPrOTo(word_encoder, dot=opt.dot, ignore_index=opt.ignore_index)
+        model = CollapsedPrOTo(word_encoder, dot=opt.dot, ignore_index=opt.ignore_index, N=opt.N)
         framework = FewShotNERFramework(train_data_loader, val_data_loader, test_data_loader, use_sampled_data=opt.use_sampled_data)
     else:
         raise NotImplementedError
