@@ -303,13 +303,13 @@ class FewShotNERFramework:
         ckpt: Path of the checkpoint
         return: Checkpoint dict
         '''
-        print(os.getcwd())
+        print(f"[INFO] ...model load path: {os.getcwd()}")
         if os.path.isfile(ckpt):
             checkpoint = torch.load(ckpt)
-            print("Successfully loaded checkpoint '%s'" % ckpt)
+            print(f"[INFO] Successfully loaded checkpoint '{ckpt}'")
             return checkpoint
         else:
-            raise Exception("No checkpoint found at '%s'" % ckpt)
+            raise Exception(f"[ERROR] No checkpoint found at '{ckpt}'")
     
     def item(self, x):
         '''
@@ -347,10 +347,10 @@ class FewShotNERFramework:
         val_iter: Num of iterations of validating
         val_step: Validate every val_step steps
         '''
-        print("Start training...")
+        print("[INFO] Start training...")
     
         # Init optimizer
-        print('Use bert optim!')
+        print('[INFO] Use BERT optim!')
         parameters_to_optimize = list(model.named_parameters())
         no_decay = ['bias', 'LayerNorm.bias', 'LayerNorm.weight']
         parameters_to_optimize = [
@@ -371,9 +371,9 @@ class FewShotNERFramework:
             own_state = model.state_dict()
             for name, param in state_dict.items():
                 if name not in own_state:
-                    print('ignore {}'.format(name))
+                    print(f'[INFO] ...ignore {name}')
                     continue
-                print('load {} from {}'.format(name, load_ckpt))
+                print(f'[INFO] ...load {name} from {load_ckpt}')
                 own_state[name].copy_(param)
 
         if fp16:
@@ -400,10 +400,11 @@ class FewShotNERFramework:
                             support[k] = support[k].cuda()
                             query[k] = query[k].cuda()
                     label = label.cuda()
-
-                logits, pred, _, _ = model(support, query)
-                assert logits.shape[0] == label.shape[0], print(logits.shape, label.shape)
+                logits, pred, ot_cost, _, _ = model(support, query)
+                assert logits.shape[0] == label.shape[0], print(f'[ERROR] logit shape: {logits.shape} | label shape: {label.shape}')
                 loss = model.loss(logits, label) / float(grad_iter)
+                if ot_cost is not None:
+                    loss += ot_cost
                 tmp_pred_cnt, tmp_label_cnt, correct = model.metrics_by_entity(pred, label)
                     
                 if fp16:
@@ -427,7 +428,7 @@ class FewShotNERFramework:
                     precision = correct_cnt / pred_cnt
                     recall = correct_cnt / label_cnt
                     f1 = 2 * precision * recall / (precision + recall)
-                    sys.stdout.write('step: {0:4} | loss: {1:2.6f} | [ENTITY] precision: {2:3.4f}, recall: {3:3.4f}, f1: {4:3.4f}'\
+                    sys.stdout.write('[INFO] step: {0:4} | loss: {1:2.6f} | [ENTITY] precision: {2:3.4f}, recall: {3:3.4f}, f1: {4:3.4f}'\
                         .format(it + 1, iter_loss/ iter_sample, precision, recall, f1) + '\r')
                 sys.stdout.flush()
 
@@ -435,7 +436,7 @@ class FewShotNERFramework:
                     _, _, f1, _, _, _, _ = self.eval(model, val_iter)
                     model.train()
                     if f1 > best_f1:
-                        print('Best checkpoint')
+                        print('[INFO] Best checkpoint!')
                         torch.save({'state_dict': model.state_dict()}, save_ckpt)
                         best_f1 = f1
                     iter_loss = 0.
@@ -449,7 +450,7 @@ class FewShotNERFramework:
                 it += 1
                 
         print("\n####################\n")
-        print("Finish training " + model_name)
+        print(f"[INFO] Finish training {model_name}...!")
     
     def __get_emmissions__(self, logits, tags_list):
         # split [num_of_query_tokens, num_class] into [[num_of_token_in_sent, num_class], ...]
@@ -478,7 +479,7 @@ class FewShotNERFramework:
                 pred.append(label-1)
         return torch.tensor(pred).cuda()
 
-    def eval(self, model, eval_iter, ckpt=None): 
+    def eval(self, model, eval_iter, ckpt=None, plot=False): 
         '''
         model: a FewShotREModel instance
         B: Batch size
@@ -493,10 +494,10 @@ class FewShotNERFramework:
         
         model.eval()
         if ckpt is None:
-            print("Use val dataset")
+            print("[INFO] Use val dataset!")
             eval_dataset = self.val_data_loader
         else:
-            print("Use test dataset")
+            print("[INFO] Use test dataset!")
             if ckpt != 'none':
                 state_dict = self.__load_model__(ckpt)['state_dict']
                 own_state = model.state_dict()
@@ -530,60 +531,60 @@ class FewShotNERFramework:
                                 support[k] = support[k].cuda()
                                 query[k] = query[k].cuda()
                         label = label.cuda()
-                    logits, pred, proto, embs = model(support, query)
-                    
-                    # plot embedding per each batch
-                    prev_num_sent = 0
-                    prev_num_label = 0
-                    for batch_idx in range(len(proto)):
-                        curr_num_sent = len(embs[batch_idx])
-                        curr_mask = query['text_mask'][prev_num_sent:prev_num_sent + curr_num_sent].bool()
-                        
-                        # get current prototypes
-                        curr_proto = proto[batch_idx]
-                        
-                        # get current embedding
-                        curr_emb = torch.masked_select(embs[batch_idx], curr_mask.unsqueeze(-1)).reshape(-1, 768)
-                        
-                        # get current label
-                        curr_num_label = len(curr_emb)
-                        curr_label = label[prev_num_label:prev_num_label + curr_num_label]
-                        
-                        # get current prediction
-                        curr_pred = pred[prev_num_label:prev_num_label + curr_num_label]
-                        
-                        # udpate each index
-                        prev_num_sent += curr_num_sent
-                        prev_num_label += curr_num_label
-                       
-                        # plot embedding in t-SNE
-                        ## filter out embedding, predictions, labels where label != -1
-                        curr_emb = curr_emb[curr_label != -1]
-                        curr_pred = curr_pred[curr_label != -1].detach().cpu().numpy()
-                        curr_label = curr_label[curr_label != -1].detach().cpu().numpy()
-                        
-                        ## convert label to tag
-                        curr_tag = query['label2tag'][batch_idx]
-                        curr_pred_tag = [curr_tag[p.item()] for p in curr_pred]
-                        curr_label_tag = [curr_tag[l.item()] for l in curr_label]
-                        
-                        ## get shrunken embedding
-                        sh_all = torch.cat([curr_proto, curr_emb], dim=0)
-                        emb_sh_all = umap.UMAP(n_components=2).fit_transform(sh_all.detach().cpu().numpy())
-                        curr_proto_sh, curr_emb_sh = emb_sh_all[:len(curr_proto)], emb_sh_all[len(curr_proto):]
-                        
-                        fig, ax = plt.subplots(figsize=(15, 15))
-                        for g in np.unique(curr_label):
-                            idx_label = np.where(curr_label == g)
-                            idx_pred = np.where(curr_pred == g)
-                            ax.scatter(x=curr_emb_sh[:, 0][idx_label], y=curr_emb_sh[:, 1][idx_label], s=1e2, alpha=0.8, label=curr_tag[g])
-                        ax.scatter(x=curr_emb_sh[:, 0], y=curr_emb_sh[:, 1], s=5e2, alpha=0.5, c=curr_label != curr_pred, marker='+') 
-                        ax.legend()
-                        ax.plot(curr_proto_sh[:, 0], curr_proto_sh[:, 1], 'ro', markersize=100, alpha=0.1)
-                        for idx, (x, y) in enumerate(curr_proto_sh):
-                            ax.annotate([str(proto_name) for proto_name in curr_tag.values()][idx],  xy=(x - 0.05, y - 0.05))
-                        plt.savefig(f'./plot/query_it_{str(it).zfill(5)}_batch_{str(batch_idx).zfill(2)}.png')
-                        plt.close()
+                    logits, pred, ot_cost, proto, embs = model(support, query)
+                    if plot and (torch.randint(low=1, high=100, size=(1,)).item() % 5 == 0):
+                        # plot embedding per each batch
+                        prev_num_sent = 0
+                        prev_num_label = 0
+                        for batch_idx in range(len(proto)):
+                            curr_num_sent = len(embs[batch_idx])
+                            curr_mask = query['text_mask'][prev_num_sent:prev_num_sent + curr_num_sent].bool()
+
+                            # get current prototypes
+                            curr_proto = proto[batch_idx]
+
+                            # get current embedding
+                            curr_emb = torch.masked_select(embs[batch_idx], curr_mask.unsqueeze(-1)).reshape(-1, 768)
+
+                            # get current label
+                            curr_num_label = len(curr_emb)
+                            curr_label = label[prev_num_label:prev_num_label + curr_num_label]
+
+                            # get current prediction
+                            curr_pred = pred[prev_num_label:prev_num_label + curr_num_label]
+
+                            # udpate each index
+                            prev_num_sent += curr_num_sent
+                            prev_num_label += curr_num_label
+
+                            # plot embedding in t-SNE
+                            ## filter out embedding, predictions, labels where label != -1
+                            curr_emb = curr_emb[curr_label != -1]
+                            curr_pred = curr_pred[curr_label != -1].detach().cpu().numpy()
+                            curr_label = curr_label[curr_label != -1].detach().cpu().numpy()
+
+                            ## convert label to tag
+                            curr_tag = query['label2tag'][batch_idx]
+                            curr_pred_tag = [curr_tag[p.item()] for p in curr_pred]
+                            curr_label_tag = [curr_tag[l.item()] for l in curr_label]
+
+                            ## get shrunken embedding
+                            sh_all = torch.cat([curr_proto, curr_emb], dim=0)
+                            emb_sh_all = umap.UMAP(n_components=2).fit_transform(sh_all.detach().cpu().numpy())
+                            curr_proto_sh, curr_emb_sh = emb_sh_all[:len(curr_proto)], emb_sh_all[len(curr_proto):]
+
+                            fig, ax = plt.subplots(figsize=(15, 15))
+                            for g in np.unique(curr_label):
+                                idx_label = np.where(curr_label == g)
+                                idx_pred = np.where(curr_pred == g)
+                                ax.scatter(x=curr_emb_sh[:, 0][idx_label], y=curr_emb_sh[:, 1][idx_label], s=1e2, alpha=0.8, label=curr_tag[g])
+                            ax.scatter(x=curr_emb_sh[:, 0], y=curr_emb_sh[:, 1], s=5e2, alpha=0.5, c=curr_label != curr_pred, marker='+') 
+                            ax.legend()
+                            ax.plot(curr_proto_sh[:, 0], curr_proto_sh[:, 1], 'ro', markersize=100, alpha=0.1)
+                            for idx, (x, y) in enumerate(curr_proto_sh):
+                                ax.annotate([str(proto_name) for proto_name in curr_tag.values()][idx],  xy=(x - 0.05, y - 0.05))
+                            plt.savefig(f'./plot/query_it_{str(it).zfill(5)}_batch_{str(batch_idx).zfill(2)}.png')
+                            plt.close()
                         
                     if self.viterbi:
                         pred = self.viterbi_decode(logits, query['label'])
@@ -613,7 +614,7 @@ class FewShotNERFramework:
             fn_error = fn_cnt / total_token_cnt
             within_error = within_cnt / (total_span_cnt + epsilon)
             outer_error = outer_cnt / (total_span_cnt + epsilon)
-            sys.stdout.write('[EVAL] step: {0:4} | [ENTITY] precision: {1:3.4f}, recall: {2:3.4f}, f1: {3:3.4f}'.format(it + 1, precision, recall, f1) + '\r')
+            sys.stdout.write('[INFO] [EVAL] step: {0:4} | [ENTITY] precision: {1:3.4f}, recall: {2:3.4f}, f1: {3:3.4f}'.format(it + 1, precision, recall, f1) + '\r')
             sys.stdout.flush()
             print("")
         return precision, recall, f1, fp_error, fn_error, within_error, outer_error

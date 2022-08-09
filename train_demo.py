@@ -4,6 +4,7 @@ from util.framework import FewShotNERFramework
 from util.word_encoder import BERTWordEncoder
 from model.proto import Proto
 from model.nnshot import NNShot
+from model.collapsedproto import CollapsedPrOTo
 import sys
 import torch
 from torch import optim, nn
@@ -67,7 +68,8 @@ def main():
            help='label index to ignore when calculating loss and metrics')
     parser.add_argument('--use_sampled_data', action='store_true',
            help='use released sampled data, the data should be stored at "data/episode-data/" ')
-
+    parser.add_argument('--plot', action='store_true',
+           help='plot test output')
 
     # only for bert / roberta
     parser.add_argument('--pretrain_ckpt', default=None,
@@ -150,6 +152,10 @@ def main():
         print('use structshot')
         model = NNShot(word_encoder, dot=opt.dot, ignore_index=opt.ignore_index)
         framework = FewShotNERFramework(train_data_loader, val_data_loader, test_data_loader, N=opt.N, tau=opt.tau, train_fname=opt.train, viterbi=True, use_sampled_data=opt.use_sampled_data)
+    elif model_name == 'collapsedproto':
+        print('use CollapsedPrOTo')
+        model = CollapsedPrOTo(word_encoder, dot=opt.dot, ignore_index=opt.ignore_index)
+        framework = FewShotNERFramework(train_data_loader, val_data_loader, test_data_loader, use_sampled_data=opt.use_sampled_data)
     else:
         raise NotImplementedError
 
@@ -178,7 +184,7 @@ def main():
             ckpt = 'none'
 
     # test
-    precision, recall, f1, fp, fn, within, outer = framework.eval(model, opt.test_iter, ckpt=ckpt)
+    precision, recall, f1, fp, fn, within, outer = framework.eval(model, opt.test_iter, ckpt=ckpt, plot=opt.plot)
     print("RESULT: precision: %.4f, recall: %.4f, f1:%.4f" % (precision, recall, f1))
     print('ERROR ANALYSIS: fp: %.4f, fn: %.4f, within:%.4f, outer: %.4f'%(fp, fn, within, outer))
 
