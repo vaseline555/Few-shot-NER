@@ -18,11 +18,12 @@ class CollapsedPrOTo(util.framework.FewShotNERModel):
         self.drop = nn.Dropout()
         self.dot = dot
         self.bary_map = None
-        self.angle_generator = nn.Sequential(
-            nn.ReLU()
-            nn.Linear(768, (N + 1) // 2),
-            nn.Sigmoid()
-        )
+        #self.angle_generator = nn.Sequential(
+        #    nn.ReLU(),
+        #    nn.Linear(768, (N + 1) // 2),
+        #    nn.Sigmoid()
+        #)
+        self.null_proj = None
         
     def __dist__(self, x, y, dim):
         if self.dot:
@@ -34,6 +35,7 @@ class CollapsedPrOTo(util.framework.FewShotNERModel):
         # S [class, embed_dim], Q [num_of_sent, num_of_tokens, embed_dim]
         assert Q.size()[:2] == q_mask.size()
         Q = Q[q_mask==1].view(-1, Q.size(-1)) # [num_of_all_text_tokens, embed_dim]
+        Q = Q @ self.null_proj
         Q = self.bary_map.transform(Q)
         return self.__dist__(S.unsqueeze(0), Q.unsqueeze(1), 2)
 
@@ -78,23 +80,28 @@ class CollapsedPrOTo(util.framework.FewShotNERModel):
                 support['text_mask'][current_support_num: current_support_num+sent_support_num])
             
             # Generate angles used for equiangular tight frame conversion matrix, `U`
-            angles = self.angle_generator(support_emb[current_support_num:current_support_num+sent_support_num].mean(0)).mul(360)
+            #angles = self.angle_generator(support_proto.mean(0)).mul(360)
+            null_proto = support_proto.clone(); null_proto[0] = torch.zeros_like(null_proto[0]).to(null_proto.device)
+            null_proj = torch.linalg.lstsq(support_proto, null_proto)[0]
+            self.null_proj = nn.Parameter(null_proj)
+            support_proto = support_proto @ self.null_proj
             
             # Generate random equiangular tight frames (ETFs)
             N, D = support_proto.shape
             u_list = []
             for i in range(N // 2):
+                alpha = torch.randint(low=0, high=360, size=(1,))
                 angle_to_radian = torch.tensor(math.pi / 180)
-                s = torch.sin(angles[i] * angle_to_radian)
-                c = torch.cos(angles[i] * angle_to_radian)
+                s = torch.sin(alpha * angle_to_radian)
+                c = torch.cos(alpha * angle_to_radian)
                 rot = torch.tensor([[c, -s], [s, c]])
                 u_list.append(rot)
             else:
                 if N % 2 == 1:
                     u_list.append(torch.tensor([1]))
                 U = torch.block_diag(*u_list)
-                U = torch.nn.functional.pad(U, (0, 0, 0, D - N + 1), mode='constant')
-            M = (torch.eye(N) - (torch.ones(N, 1) @ torch.ones(1, N)).div(N)).mul(math.sqrt(N / (N - 1))) @ U.T
+                U = torch.nn.functional.pad(U, (0, 0, 0, D - N), mode='constant')
+            M = (torch.eye(N) - (torch.ones(N, 1) @ torch.ones(1, N)).div(N)).mul((N / (N - 1))**0.5) @ U.T
             target_proto = M.to(support_proto.device)
             
             # get Barycentric mapping of current prototype into ETFs 
