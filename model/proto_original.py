@@ -71,7 +71,7 @@ class Proto(util.framework.FewShotNERModel):
             current_support_num += sent_support_num
         logits = torch.cat(logits, 0)
         _, pred = torch.max(logits, 1)
-        return logits, pred
+        return logits, pred, None, None, None
 
     
     

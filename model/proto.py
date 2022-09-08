@@ -77,7 +77,7 @@ class Proto(util.framework.FewShotNERModel):
         logits = torch.cat(logits, 0)
         _, pred = torch.max(logits, 1)
         proto = torch.stack(proto, 0) # save epoisode-wise prototypes
-        return logits, pred, proto, embs
+        return logits, pred, None, proto, embs
 
     
     

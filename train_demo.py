@@ -5,6 +5,9 @@ from util.word_encoder import BERTWordEncoder
 from model.proto import Proto
 from model.nnshot import NNShot
 from model.collapsedproto import CollapsedPrOTo
+from model.saca import SaCaProto
+from model.gnn import GraphProto
+from model.oauproto import OAuProto
 import sys
 import torch
 from torch import optim, nn
@@ -23,6 +26,7 @@ def set_seed(seed):
     torch.backends.cudnn.deterministic = True
 
 def main():
+    torch.autograd.set_detect_anomaly(True)
     parser = argparse.ArgumentParser()
     parser.add_argument('--mode', default='inter',
             help='training mode, must be in [inter, intra]')
@@ -155,6 +159,18 @@ def main():
     elif model_name == 'collapsedproto':
         print('use CollapsedPrOTo')
         model = CollapsedPrOTo(word_encoder, dot=opt.dot, ignore_index=opt.ignore_index, N=opt.N)
+        framework = FewShotNERFramework(train_data_loader, val_data_loader, test_data_loader, use_sampled_data=opt.use_sampled_data)
+    elif model_name == 'gnn':
+        print('use GNN')
+        model = GraphProto(word_encoder, dot=opt.dot, ignore_index=opt.ignore_index)
+        framework = FewShotNERFramework(train_data_loader, val_data_loader, test_data_loader, use_sampled_data=opt.use_sampled_data)
+    elif model_name == 'saca':
+        print('use SACA')
+        model = SaCaProto(word_encoder, dot=opt.dot, ignore_index=opt.ignore_index)
+        framework = FewShotNERFramework(train_data_loader, val_data_loader, test_data_loader, use_sampled_data=opt.use_sampled_data)
+    elif model_name == 'oauproto':
+        print('use O-Augmented ProtoNet')
+        model = OAuProto(word_encoder, dot=opt.dot, ignore_index=opt.ignore_index)
         framework = FewShotNERFramework(train_data_loader, val_data_loader, test_data_loader, use_sampled_data=opt.use_sampled_data)
     else:
         raise NotImplementedError
