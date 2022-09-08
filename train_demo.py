@@ -200,7 +200,7 @@ def main():
             ckpt = 'none'
 
     # test
-    precision, recall, f1, fp, fn, within, outer = framework.eval(model, opt.test_iter, ckpt=ckpt, plot=opt.plot)
+    precision, recall, f1, fp, fn, within, outer = framework.eval(model, prefix, opt.test_iter, ckpt=ckpt, plot=opt.plot)
     print("RESULT: precision: %.4f, recall: %.4f, f1:%.4f" % (precision, recall, f1))
     print('ERROR ANALYSIS: fp: %.4f, fn: %.4f, within:%.4f, outer: %.4f'%(fp, fn, within, outer))
 

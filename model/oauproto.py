@@ -21,12 +21,10 @@ class OAuProto(util.framework.FewShotNERModel):
         self.sim = torch.nn.CosineSimilarity(dim=2)
         
         # embedding dimension
-        self.embedding_dim = 512
+        self.embedding_dim = 256
         
         # for self attention
-        self.ln_ks = nn.LayerNorm(768)
-        self.ln_vs = nn.LayerNorm(768)
-        self.ln_qs = nn.LayerNorm(768)
+        self.ln_s = nn.LayerNorm(768)
         
         self.to_ks = nn.Linear(768, 768 , bias=False)
         self.to_vs = nn.Linear(768, 768 , bias=False)
@@ -35,8 +33,6 @@ class OAuProto(util.framework.FewShotNERModel):
         self.mhas = nn.MultiheadAttention(embed_dim=768, num_heads=16, batch_first=True)
         
         # for cross attention
-        self.ln_k = nn.LayerNorm(768)
-        self.ln_v = nn.LayerNorm(768)
         self.ln_q = nn.LayerNorm(768)
         
         self.to_k = nn.Linear(768, 768, bias=False)
@@ -48,7 +44,7 @@ class OAuProto(util.framework.FewShotNERModel):
         # projection
         self.proj = nn.Sequential(
             nn.Linear(768, self.embedding_dim),
-            nn.Dropout(0.5)
+            nn.Dropout(0.2)
         )
         
         # for label embedding
@@ -135,16 +131,16 @@ class OAuProto(util.framework.FewShotNERModel):
                 q_mask
             )
             
+            """
             # Version 1) self-attention of S & cross attention of Q -> ProtoNet
             # Get query, key, and value for self-attention
-            Q, K, V = self.to_qs(self.ln_qs(s_emb_selected)), self.to_ks(self.ln_ks(s_emb_selected)), self.to_vs(self.ln_vs(s_emb_selected))
-            s_emb_selected = self.mhas(Q.unsqueeze(0), K.unsqueeze(0), V.unsqueeze(0))[0].squeeze()
+            Q, K, V = self.to_qs(s_emb_selected), self.to_ks(s_emb_selected), self.to_vs(s_emb_selected)
+            s_emb_selected = self.ln_s(s_emb_selected + self.mhas(Q.unsqueeze(0), K.unsqueeze(0), V.unsqueeze(0))[0].squeeze())
             
             # Get query, key (from S) and value (from Q) for cross-attention
-            Q, K, V = self.to_q(self.ln_q(q_emb_selected)), self.to_k(self.ln_k(s_emb_selected)), self.to_v(self.ln_v(s_emb_selected))
-            q_emb_selected = self.mha(Q.unsqueeze(0), K.unsqueeze(0), V.unsqueeze(0))[0].squeeze()
-            
-            s_emb_selected, q_emb_selected = self.proj(s_emb_selected), self.proj(q_emb_selected)
+            Q, K, V = self.to_q(q_emb_selected), self.to_k(s_emb_selected), self.to_v(s_emb_selected)
+            q_emb_selected = self.ln_q(q_emb_selected + self.mha(Q.unsqueeze(0), K.unsqueeze(0), V.unsqueeze(0))[0].squeeze())
+            s_emb_selected, q_emb_selected = self.proj(F.relu(s_emb_selected)), self.proj(F.relu(q_emb_selected))
             
             # Transform into task-specific embeddings            
             s_label_embs = F.dropout(self.label_embedding(s_label_selected.long()), p=0.2)
@@ -155,6 +151,7 @@ class OAuProto(util.framework.FewShotNERModel):
             # Scale embedding
             s_emb_selected = self.scaler(s_emb_selected)
             q_emb_selected = self.scaler(q_emb_selected)
+            """
             
             # O-calss prototype augmentation
             mean_shift = gpushift.MeanShift(

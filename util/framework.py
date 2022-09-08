@@ -351,13 +351,13 @@ class FewShotNERFramework:
     
         # Init optimizer
         print('[INFO] Use BERT optim!')
-        parameters_to_optimize = list(model.named_parameters())
+        parameters_to_optimize = model.named_parameters()
         no_decay = ['bias', 'LayerNorm.bias', 'LayerNorm.weight']
         parameters_to_optimize = [
             {'params': [p for n, p in parameters_to_optimize 
-                if not any(nd in n for nd in no_decay)], 'weight_decay': 0.01},
+                if not any(nd in n for nd in no_decay) and 'word_encoder' not in n], 'weight_decay': 0.01},
             {'params': [p for n, p in parameters_to_optimize
-                if any(nd in n for nd in no_decay)], 'weight_decay': 0.0}
+                if any(nd in n for nd in no_decay) and 'word_encoder' not in n], 'weight_decay': 0.0}
         ]
         if use_sgd_for_bert:
             optimizer = torch.optim.SGD(parameters_to_optimize, lr=learning_rate)
@@ -393,9 +393,11 @@ class FewShotNERFramework:
         it = 0
         while it + 1 < train_iter:
             for _, (support, query) in enumerate(self.train_data_loader):
-                #label = torch.cat(query['label'], 0)
-                s_label = torch.cat(support['label'], 0)
-                label = torch.cat([s_label[s_label != -1], torch.cat(query['label'], 0)], 0)
+                if 'saca' in model_name:
+                    s_label = torch.cat(support['label'], 0)
+                    label = torch.cat([s_label[s_label != -1], torch.cat(query['label'], 0)], 0)
+                else:
+                    label = torch.cat(query['label'], 0)
                 if torch.cuda.is_available():
                     for k in support:
                         if k != 'label' and k != 'sentence_num':
@@ -481,7 +483,7 @@ class FewShotNERFramework:
                 pred.append(label-1)
         return torch.tensor(pred).cuda()
 
-    def eval(self, model, eval_iter, ckpt=None, plot=False): 
+    def eval(self, model, model_name, eval_iter, ckpt=None, plot=False): 
         '''
         model: a FewShotREModel instance
         B: Batch size
@@ -526,7 +528,11 @@ class FewShotNERFramework:
             it = 0
             while it + 1 < eval_iter:
                 for _, (support, query) in enumerate(eval_dataset):
-                    label = torch.cat(query['label'], 0)
+                    if 'saca' in model_name:
+                        s_label = torch.cat(support['label'], 0)
+                        label = torch.cat([s_label[s_label != -1], torch.cat(query['label'], 0)], 0)
+                    else:
+                        label = torch.cat(query['label'], 0)
                     if torch.cuda.is_available():
                         for k in support:
                             if k != 'label' and k != 'sentence_num':

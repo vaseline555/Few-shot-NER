@@ -21,12 +21,10 @@ class SaCaProto(util.framework.FewShotNERModel):
         self.sim = torch.nn.CosineSimilarity(dim=2)
         
         # embedding dimension
-        self.embedding_dim = 512
+        self.embedding_dim = 768
         
         # for self attention
-        self.ln_ks = nn.LayerNorm(768)
-        self.ln_vs = nn.LayerNorm(768)
-        self.ln_qs = nn.LayerNorm(768)
+        self.ln_s = nn.LayerNorm(768)
         
         self.to_ks = nn.Linear(768, 768 , bias=False)
         self.to_vs = nn.Linear(768, 768 , bias=False)
@@ -35,8 +33,6 @@ class SaCaProto(util.framework.FewShotNERModel):
         self.mhas = nn.MultiheadAttention(embed_dim=768, num_heads=16, batch_first=True)
         
         # for cross attention
-        self.ln_k = nn.LayerNorm(768)
-        self.ln_v = nn.LayerNorm(768)
         self.ln_q = nn.LayerNorm(768)
         
         self.to_k = nn.Linear(768, 768, bias=False)
@@ -61,7 +57,7 @@ class SaCaProto(util.framework.FewShotNERModel):
         )
         
         # k-NN graph
-        self.K = 10
+        self.K = 5
         
         # graph layer
         self.gconv1 = dgl.nn.pytorch.conv.GraphConv(self.embedding_dim, self.embedding_dim)
@@ -106,8 +102,8 @@ class SaCaProto(util.framework.FewShotNERModel):
         K: Num of instances for each class in the support set
         Q: Num of instances in the query set
         '''
-        support_emb = self.word_encoder(support['word'], support['mask']) # [num_sent, number_of_tokens, 768]
-        query_emb = self.word_encoder(query['word'], query['mask']) # [num_sent, number_of_tokens, 768]
+        support_emb = self.word_encoder(support['word'], support['mask']).detach() # [num_sent, number_of_tokens, 768]
+        query_emb = self.word_encoder(query['word'], query['mask']).detach() # [num_sent, number_of_tokens, 768]
         support_emb = self.drop(support_emb)
         query_emb = self.drop(query_emb)
 
@@ -178,23 +174,23 @@ class SaCaProto(util.framework.FewShotNERModel):
             """
             
             
-            
+            """
             # Version 2) self-attention of S & cross attention -> Transductive GNN
             # Get query, key, and value for self-attention
-            Q, K, V = self.to_qs(self.ln_qs(s_emb_selected)), self.to_ks(self.ln_ks(s_emb_selected)), self.to_vs(self.ln_vs(s_emb_selected))
-            s_emb_selected = self.mhas(Q.unsqueeze(0), K.unsqueeze(0), V.unsqueeze(0))[0].squeeze()
+            Q, K, V = self.to_qs(s_emb_selected), self.to_ks(s_emb_selected), self.to_vs(s_emb_selected)
+            s_emb_selected = self.ln_s(s_emb_selected + self.mhas(Q.unsqueeze(0), K.unsqueeze(0), V.unsqueeze(0))[0].squeeze())
             
             # Get query, key (from S) and value (from Q) for cross-attention
-            Q, K, V = self.to_q(self.ln_q(q_emb_selected)), self.to_k(self.ln_k(s_emb_selected)), self.to_v(self.ln_v(s_emb_selected))
-            q_emb_selected = self.mha(Q.unsqueeze(0), K.unsqueeze(0), V.unsqueeze(0))[0].squeeze()
-            s_emb_selected, q_emb_selected = self.proj(s_emb_selected), self.proj(q_emb_selected)
-            
+            Q, K, V = self.to_q(q_emb_selected), self.to_k(s_emb_selected), self.to_v(s_emb_selected)
+            q_emb_selected = self.ln_q(q_emb_selected + self.mha(Q.unsqueeze(0), K.unsqueeze(0), V.unsqueeze(0))[0].squeeze())
+            s_emb_selected, q_emb_selected = self.proj(F.relu(s_emb_selected)), self.proj(F.relu(q_emb_selected))
+            """
             # Transform into task-specific embeddings            
-            s_label_embs = F.dropout(self.label_embedding(s_label_selected.long()), p=0.2)
-            q_label_embs = F.dropout(self.label_embedding.weight.mean(0).unsqueeze(0).repeat(len(q_emb_selected), 1), p=0.2)
+            s_label_embs = self.label_embedding(s_label_selected.long())
+            q_label_embs = self.label_embedding.weight.mean(0).unsqueeze(0).repeat(len(q_emb_selected), 1)
             s_emb_selected = s_emb_selected + s_label_embs
             q_emb_selected = q_emb_selected + q_label_embs
-
+            
             # Scale embedding
             s_emb_selected = self.scaler(s_emb_selected)
             q_emb_selected = self.scaler(q_emb_selected)
@@ -204,15 +200,16 @@ class SaCaProto(util.framework.FewShotNERModel):
             emb1 = torch.unsqueeze(embs, 1) # N*1*d
             emb2 = torch.unsqueeze(embs, 0) # 1*N*d
             
-            """
             ## Euclidean adjcency matrix
-            bandwidth = 1
-            W = emb1.sub(emb2).pow(2).mean(2).mul(-1).div(2 * bandwidth**2).exp()   # N*N*d -> N*N
-            """
+            #bandwidth = 1
+            #W = emb1.sub(emb2).pow(2).mean(2).mul(-1).div(2 * bandwidth**2).exp()   # N*N*d -> N*N
             
-            ## Dot product adjacency matrix
+            ## Dot product adjacency matrix - not working well...
             W = (emb1 * emb2).sum(2)
 
+            ## Cosine distance adjacency matrix
+            #W = F.cosine_similarity(emb1, emb2, dim=2).add(1.).div(2.)
+            
             ## k-NN squashing
             topk, indices = torch.topk(W, self.K)
             mask = torch.zeros_like(W)
@@ -227,7 +224,10 @@ class SaCaProto(util.framework.FewShotNERModel):
             D2 = torch.unsqueeze(D_sqrt_inv, 0).repeat(len(embs), 1)
             adj = D1 * W * D2
             
-            # construct graph
+            
+            
+            """
+            # Type 1) construct graph
             graph = dgl.graph(torch.nonzero(adj, as_tuple=True))
             graph = dgl.add_self_loop(graph)
             
@@ -236,7 +236,15 @@ class SaCaProto(util.framework.FewShotNERModel):
        
             embs = F.relu(self.gconv1(graph, embs))
             logit = self.gconv2(graph, embs)
+            """
             
+            
+            
+            # Type 2) label propagation
+            labels = F.one_hot(s_label_selected.long()).float()
+            labels = torch.cat([labels, torch.ones(len(q_emb_selected), labels.shape[-1]).to(labels.device).div(labels.shape[-1])], 0)
+            logit = torch.matmul(torch.inverse(torch.eye(len(labels)).to(embs.device) - 0.95 * adj + 1e-8), labels)
+                                               
             logits.append(logit)
             current_query_num += sent_query_num
             current_support_num += sent_support_num
