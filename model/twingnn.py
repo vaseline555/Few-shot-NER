@@ -182,7 +182,7 @@ class TwinGNN(util.framework.FewShotNERModel):
                 weights='distance',
                 n_neighbors=self.K,
                 metric='mahalanobis',
-                metric_params={'VI': np.cov(s_emb_selected.detach().cpu().numpy().T)},
+                metric_params={'VI': np.cov(s_emb_selected[s_label_selected == 0].detach().cpu().numpy().T)},
                 n_jobs=-1
             ).fit(s_emb_selected.detach().cpu().numpy(), s_label_selected.detach().cpu().numpy())
 
@@ -190,7 +190,6 @@ class TwinGNN(util.framework.FewShotNERModel):
             q_src = torch.arange(len(q_emb_selected)).to(s_label_selected.device).add(len(s_label_selected)).add(2)
             q_dst = torch.tensor(nn.predict(q_emb_selected.detach().cpu().numpy())).to(q_src.device)
             q_dst[q_dst != 0] = 1
-            print(Counter(q_dst.detach().cpu().numpy()))
             
             ## convert into DGL data structure 
             graph = dgl.graph((torch.cat([torch.tensor([0, 1]).to(s_src.device), s_src, q_src]).tolist(), torch.cat([torch.tensor([0, 1]).to(s_src.device), s_dst, q_dst]).tolist())).to(s_emb.device)
@@ -233,6 +232,7 @@ class TwinGNN(util.framework.FewShotNERModel):
                     q_emb_selected
                 ], 0
             )))[2:]
+            
             
             
             
