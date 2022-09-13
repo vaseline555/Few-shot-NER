@@ -172,7 +172,7 @@ class TwinGNN(util.framework.FewShotNERModel):
             
             # 2) Class graph construction
             ## construct edges
-            s_src = torch.arange(len(s_label_selected)).to(s_label_selected.device)
+            s_src = torch.arange(len(s_label_selected) + 2).to(s_label_selected.device) # 2 for 0 and 1
             s_dst = s_label_selected.clone()
             s_dst[s_dst != 0] = 1
             
@@ -193,33 +193,35 @@ class TwinGNN(util.framework.FewShotNERModel):
             print(Counter(q_dst.detach().cpu().numpy()))
             
             ## convert into DGL data structure 
-            graph = dgl.graph((torch.cat([s_src, q_src]).tolist(), torch.cat([s_dst, q_dst]).tolist())).to(s_emb.device)
+            graph = dgl.graph((torch.cat([torch.tensor([0, 1]).to(s_src.device), s_src, q_src]).tolist(), torch.cat([s_dst, q_dst]).tolist())).to(s_emb.device)
             graph = dgl.add_self_loop(graph)
             
-            graph.ndata['feat'] = torch.cat([s_emb_selected, q_emb_selected], 0)
+            graph.ndata['feat'] = torch.cat([s_emb_selected[s_label_selected == 0].mean(0), s_emb_selected[s_label_selected == 1].mean(0), s_emb_selected, q_emb_selected], 0)
             graph = dgl.to_homogeneous(graph, ndata=['feat'])
-            span_embs = self.drop(self.span_gconv(graph, torch.cat([s_emb_selected, q_emb_selected], 0)))
+            span_embs = self.drop(self.span_gconv(graph, torch.cat([s_emb_selected[s_label_selected == 0].mean(0), s_emb_selected[s_label_selected == 1].mean(0), s_emb_selected, q_emb_selected], 0)))[2:]
             
             
             
             
             
             # 3) Task graph construction
-            clustered_labels = MeanShift(bandwidth=1, n_jobs=-1).fit_predict(torch.cat([s_emb_selected, q_emb_selected], 0).detach().cpu().numpy())
+            ms = MeanShift(bandwidth=1, n_jobs=-1).fit(torch.cat([s_emb_selected, q_emb_selected], 0).detach().cpu().numpy())
+            clustered_labels = ms.fit_predict(torch.cat([s_emb_selected, q_emb_selected], 0).detach().cpu().numpy())
             
-            s_src = torch.arange(len(s_label_selected)).to(s_label_selected.device)
+            s_src = torch.arange(len(s_label_selected) + len(np.unique(clustered_labels))).to(s_label_selected.device)
             s_dst = torch.tensor(clustered_labels)[:len(s_emb_selected)].to(s_label_selected.device)
             
             q_src = torch.arange(len(q_emb_selected)).to(s_label_selected.device).add(len(s_label_selected))
             q_dst = torch.tensor(clustered_labels)[len(s_emb_selected):].to(s_label_selected.device)
             
             ## convert into DGL data structure
-            graph = dgl.graph((torch.cat([s_src, q_src]).tolist(), torch.cat([s_dst, q_dst]).tolist())).to(s_emb.device)
+            graph = dgl.graph((torch.cat([torch.arange(len(np.unique(clustered_labels))).to(s_src.device), s_src, q_src]).tolist(), torch.cat([s_dst, q_dst]).tolist())).to(s_emb.device)
             graph = dgl.add_self_loop(graph)
             
-            graph.ndata['feat'] = torch.cat([s_emb_selected, q_emb_selected], 0)
+            
+            graph.ndata['feat'] = 
             graph = dgl.to_homogeneous(graph, ndata=['feat'])
-            task_embs = self.drop(self.task_gconv(graph, torch.cat([s_emb_selected, q_emb_selected], 0)))
+            task_embs = self.drop(self.task_gconv(graph, torch.cat([torch.tensor(ms.cluster_centers_).to(s_emb.device), s_emb_selected, q_emb_selected], 0)))[len(np.unique(clustered_labels)):]
 
             
                                                  
