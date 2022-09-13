@@ -172,7 +172,7 @@ class TwinGNN(util.framework.FewShotNERModel):
             
             # 2) Class graph construction
             ## construct edges
-            s_src = torch.arange(len(s_label_selected) + 2).to(s_label_selected.device) # 2 for 0 and 1
+            s_src = torch.arange(len(s_label_selected)).to(s_label_selected.device).add(2) # 2 for 0 and 1
             s_dst = s_label_selected.clone()
             s_dst[s_dst != 0] = 1
             
@@ -208,7 +208,7 @@ class TwinGNN(util.framework.FewShotNERModel):
             ms = MeanShift(bandwidth=1, n_jobs=-1).fit(torch.cat([s_emb_selected, q_emb_selected], 0).detach().cpu().numpy())
             clustered_labels = ms.fit_predict(torch.cat([s_emb_selected, q_emb_selected], 0).detach().cpu().numpy())
             
-            s_src = torch.arange(len(s_label_selected) + len(np.unique(clustered_labels))).to(s_label_selected.device)
+            s_src = torch.arange(len(s_label_selected)).to(s_label_selected.device).add(len(np.unique(clustered_labels)))
             s_dst = torch.tensor(clustered_labels)[:len(s_emb_selected)].to(s_label_selected.device)
             
             q_src = torch.arange(len(q_emb_selected)).to(s_label_selected.device).add(len(s_label_selected))
