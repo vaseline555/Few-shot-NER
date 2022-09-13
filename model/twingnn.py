@@ -196,7 +196,7 @@ class TwinGNN(util.framework.FewShotNERModel):
             graph = dgl.graph((torch.cat([torch.tensor([0, 1]).to(s_src.device), s_src, q_src]).tolist(), torch.cat([torch.tensor([0, 1]).to(s_src.device), s_dst, q_dst]).tolist())).to(s_emb.device)
             graph = dgl.add_self_loop(graph)
             
-            graph.ndata['feat'] = torch.cat([s_emb_selected[s_label_selected == 0].mean(0), s_emb_selected[s_label_selected == 1].mean(0), s_emb_selected, q_emb_selected], 0)
+            graph.ndata['feat'] = torch.cat([s_emb_selected[s_label_selected == 0].mean(0, keepdim=True), s_emb_selected[s_label_selected == 1].mean(0, keepdim=True), s_emb_selected, q_emb_selected], 0)
             graph = dgl.to_homogeneous(graph, ndata=['feat'])
             span_embs = self.drop(self.span_gconv(graph, torch.cat([s_emb_selected[s_label_selected == 0].mean(0), s_emb_selected[s_label_selected == 1].mean(0), s_emb_selected, q_emb_selected], 0)))[2:]
             
