@@ -187,7 +187,7 @@ class TwinGNN(util.framework.FewShotNERModel):
             ).fit(s_emb_selected.detach().cpu().numpy(), s_label_selected.detach().cpu().numpy())
 
             #proj = self.FKT(s_emb_selected, s_dst, self.embedding_dim).detach().cpu().numpy()
-            q_src = torch.arange(len(q_emb_selected)).to(s_label_selected.device).add(len(s_label_selected))
+            q_src = torch.arange(len(q_emb_selected)).to(s_label_selected.device).add(len(s_label_selected)).add(2)
             q_dst = torch.tensor(nn.predict(q_emb_selected.detach().cpu().numpy())).to(q_src.device)
             q_dst[q_dst != 0] = 1
             print(Counter(q_dst.detach().cpu().numpy()))
@@ -195,10 +195,44 @@ class TwinGNN(util.framework.FewShotNERModel):
             ## convert into DGL data structure 
             graph = dgl.graph((torch.cat([torch.tensor([0, 1]).to(s_src.device), s_src, q_src]).tolist(), torch.cat([torch.tensor([0, 1]).to(s_src.device), s_dst, q_dst]).tolist())).to(s_emb.device)
             graph = dgl.add_self_loop(graph)
-            
-            graph.ndata['feat'] = torch.cat([s_emb_selected[s_label_selected == 0].mean(0, keepdim=True), s_emb_selected[s_label_selected == 1].mean(0, keepdim=True), s_emb_selected, q_emb_selected], 0)
+
+            graph.ndata['feat'] = torch.cat(
+                [
+                    torch.cat(
+                        [
+                            s_emb_selected[s_label_selected == 0],
+                            q_emb_selected[q_dst == 0]
+                        ], 0
+                    ).mean(0, keepdim=True), 
+                    torch.cat(
+                        [
+                            s_emb_selected[s_label_selected == 1],
+                            q_emb_selected[q_dst == 1]
+                        ], 0
+                    ).mean(0, keepdim=True), 
+                    s_emb_selected, 
+                    q_emb_selected
+                ], 0
+            )
             graph = dgl.to_homogeneous(graph, ndata=['feat'])
-            span_embs = self.drop(self.span_gconv(graph, torch.cat([s_emb_selected[s_label_selected == 0].mean(0), s_emb_selected[s_label_selected == 1].mean(0), s_emb_selected, q_emb_selected], 0)))[2:]
+            span_embs = self.drop(self.span_gconv(graph, torch.cat(
+                [
+                    torch.cat(
+                        [
+                            s_emb_selected[s_label_selected == 0],
+                            q_emb_selected[q_dst == 0]
+                        ], 0
+                    ).mean(0, keepdim=True), 
+                    torch.cat(
+                        [
+                            s_emb_selected[s_label_selected == 1],
+                            q_emb_selected[q_dst == 1]
+                        ], 0
+                    ).mean(0, keepdim=True), 
+                    s_emb_selected, 
+                    q_emb_selected
+                ], 0
+            )))[2:]
             
             
             
@@ -211,7 +245,7 @@ class TwinGNN(util.framework.FewShotNERModel):
             s_src = torch.arange(len(s_label_selected)).to(s_label_selected.device).add(len(np.unique(clustered_labels)))
             s_dst = torch.tensor(clustered_labels)[:len(s_emb_selected)].to(s_label_selected.device)
             
-            q_src = torch.arange(len(q_emb_selected)).to(s_label_selected.device).add(len(s_label_selected))
+            q_src = torch.arange(len(q_emb_selected)).to(s_label_selected.device).add(len(s_label_selected)).add(len(np.unique(clustered_labels)))
             q_dst = torch.tensor(clustered_labels)[len(s_emb_selected):].to(s_label_selected.device)
             
             ## convert into DGL data structure
