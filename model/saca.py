@@ -12,13 +12,20 @@ from torch import nn
 from torch.nn import functional as F
 
 
+class HLoss(nn.Module):
+    def __init__(self):
+        super(HLoss, self).__init__()
 
+    def forward(self, x):
+        b = F.softmax(x, dim=1) * F.log_softmax(x, dim=1)
+        b = -1.0 * b.sum()
+        return b
+    
 class SaCaProto(util.framework.FewShotNERModel):
     def __init__(self, word_encoder, dot=False, ignore_index=-1):
         util.framework.FewShotNERModel.__init__(self, word_encoder, ignore_index=ignore_index)
-        self.drop = nn.Dropout()
+        self.drop = nn.Dropout(0.2)
         self.dot = dot
-        self.sim = torch.nn.CosineSimilarity(dim=2)
         
         # embedding dimension
         self.embedding_dim = 768
@@ -57,11 +64,11 @@ class SaCaProto(util.framework.FewShotNERModel):
         )
         
         # k-NN graph
-        self.K = 5
+        self.K = 10
         
         # graph layer
-        self.gconv1 = dgl.nn.pytorch.conv.GraphConv(self.embedding_dim, self.embedding_dim)
-        self.gconv2 = dgl.nn.pytorch.conv.GraphConv(self.embedding_dim, 6)
+        self.gconv1 = dgl.nn.pytorch.conv.TAGConv(self.embedding_dim, 6)
+        self.gconv2 = dgl.nn.pytorch.conv.TAGConv(self.embedding_dim, 6)
         
     def __dist__(self, x, y, dim):
         if self.dot:
@@ -85,7 +92,7 @@ class SaCaProto(util.framework.FewShotNERModel):
                 labels.append(torch.ones(len(curr_emb)).mul(label).to(curr_emb.device))
         else:
             return embedding
-        return torch.cat(embs), torch.cat(labels)#F.one_hot(torch.cat(labels).long())
+        return torch.cat(embs), torch.cat(labels)
     
     def __get_proto__(self, emb, label):
         proto = []
@@ -93,7 +100,7 @@ class SaCaProto(util.framework.FewShotNERModel):
             proto.append(torch.mean(emb[label == l], 0))
         proto = torch.stack(proto)
         return proto
-
+    
     def forward(self, support, query):
         '''
         support: Inputs of the support set.
@@ -111,6 +118,7 @@ class SaCaProto(util.framework.FewShotNERModel):
         logits = []
         proto = []
         embs = []
+        ent_loss = 0
         current_support_num = 0
         current_query_num = 0
         assert support_emb.size()[:2] == support['mask'].size()
@@ -138,27 +146,24 @@ class SaCaProto(util.framework.FewShotNERModel):
                 q_mask
             )
             
-            """
             # Version 1) self-attention of S & cross attention of Q -> ProtoNet
-            # Get query, key, and value for self-attention
-            Q, K, V = self.to_qs(self.ln_qs(s_emb_selected)), self.to_ks(self.ln_ks(s_emb_selected)), self.to_vs(self.ln_vs(s_emb_selected))
-            s_emb_selected = self.mhas(Q.unsqueeze(0), K.unsqueeze(0), V.unsqueeze(0))[0].squeeze()
-            
-            # Get query, key (from S) and value (from Q) for cross-attention
-            Q, K, V = self.to_q(self.ln_q(q_emb_selected)), self.to_k(self.ln_k(s_emb_selected)), self.to_v(self.ln_v(s_emb_selected))
-            q_emb_selected = self.mha(Q.unsqueeze(0), K.unsqueeze(0), V.unsqueeze(0))[0].squeeze()
-            
-            s_emb_selected, q_emb_selected = self.proj(s_emb_selected), self.proj(q_emb_selected)
-            
             # Transform into task-specific embeddings            
             s_label_embs = self.label_embedding(s_label_selected.long())
             q_label_embs = self.label_embedding.weight.mean(0).unsqueeze(0).repeat(len(q_emb_selected), 1)
             s_emb_selected = s_emb_selected + s_label_embs
             q_emb_selected = q_emb_selected + q_label_embs
-
-            # Scale embedding
-            s_emb_selected = self.scaler(s_emb_selected)
-            q_emb_selected = self.scaler(q_emb_selected)
+            
+            # Get query, key, and value for self-attention
+            Q, K, V = self.to_qs(s_emb_selected), self.to_ks(s_emb_selected), self.to_vs(s_emb_selected)
+            s_emb_selected = self.ln_s(s_emb_selected + self.mhas(Q.unsqueeze(0), K.unsqueeze(0), V.unsqueeze(0))[0].squeeze())
+            
+            # Get query, key (from S) and value (from Q) for cross-attention
+            Q, K, V = self.to_q(q_emb_selected), self.to_k(s_emb_selected), self.to_v(s_emb_selected)
+            q_emb_selected = self.ln_q(q_emb_selected + self.mha(Q.unsqueeze(0), K.unsqueeze(0), V.unsqueeze(0))[0].squeeze())
+            s_emb_selected, q_emb_selected = self.proj(F.relu(s_emb_selected)), self.proj(F.relu(q_emb_selected))
+            
+            # squash O class
+            #ent_loss += HLoss()(s_emb_selected[s_label_selected == 0])
             
             # get prototype
             support_proto = self.__get_proto__(
@@ -171,9 +176,7 @@ class SaCaProto(util.framework.FewShotNERModel):
                 support_proto,
                 q_emb_selected
             )
-            """
-            
-            
+
             """
             # Version 2) self-attention of S & cross attention -> Transductive GNN
             # Get query, key, and value for self-attention
@@ -184,6 +187,8 @@ class SaCaProto(util.framework.FewShotNERModel):
             Q, K, V = self.to_q(q_emb_selected), self.to_k(s_emb_selected), self.to_v(s_emb_selected)
             q_emb_selected = self.ln_q(q_emb_selected + self.mha(Q.unsqueeze(0), K.unsqueeze(0), V.unsqueeze(0))[0].squeeze())
             s_emb_selected, q_emb_selected = self.proj(F.relu(s_emb_selected)), self.proj(F.relu(q_emb_selected))
+            
+            """
             """
             # Transform into task-specific embeddings            
             s_label_embs = self.label_embedding(s_label_selected.long())
@@ -205,10 +210,10 @@ class SaCaProto(util.framework.FewShotNERModel):
             #W = emb1.sub(emb2).pow(2).mean(2).mul(-1).div(2 * bandwidth**2).exp()   # N*N*d -> N*N
             
             ## Dot product adjacency matrix - not working well...
-            W = (emb1 * emb2).sum(2)
+            #W = (emb1 * emb2).sum(2)
 
             ## Cosine distance adjacency matrix
-            #W = F.cosine_similarity(emb1, emb2, dim=2).add(1.).div(2.)
+            W = F.cosine_similarity(emb1, emb2, dim=2).add(1.).div(2.)
             
             ## k-NN squashing
             topk, indices = torch.topk(W, self.K)
@@ -226,7 +231,7 @@ class SaCaProto(util.framework.FewShotNERModel):
             
             
             
-            """
+            
             # Type 1) construct graph
             graph = dgl.graph(torch.nonzero(adj, as_tuple=True))
             graph = dgl.add_self_loop(graph)
@@ -234,24 +239,25 @@ class SaCaProto(util.framework.FewShotNERModel):
             graph.ndata['feat'] = embs
             graph = dgl.to_homogeneous(graph, ndata=['feat'])
        
-            embs = F.relu(self.gconv1(graph, embs))
-            logit = self.gconv2(graph, embs)
+            logit = self.gconv1(graph, embs)
+            #logit = self.gconv2(graph, embs)
             """
             
             
-            
+            """
             # Type 2) label propagation
             labels = F.one_hot(s_label_selected.long()).float()
-            labels = torch.cat([labels, torch.ones(len(q_emb_selected), labels.shape[-1]).to(labels.device).div(labels.shape[-1])], 0)
+            labels = torch.cat([labels, torch.ones(len(q_emb_selected), labels.shape[-1]).to(labels.device)], 0)
             logit = torch.matmul(torch.inverse(torch.eye(len(labels)).to(embs.device) - 0.95 * adj + 1e-8), labels)
-                                               
+            """
+            
             logits.append(logit)
             current_query_num += sent_query_num
             current_support_num += sent_support_num
         logits = torch.cat(logits, 0)        
         _, pred = torch.max(logits, 1)
         #proto = torch.stack(proto, 0) # save epoisode-wise prototypes
-        return logits, pred, None, proto, embs
+        return logits, pred, ent_loss, proto, embs
 
     
     

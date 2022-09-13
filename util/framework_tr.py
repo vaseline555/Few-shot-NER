@@ -275,6 +275,7 @@ class FewShotNERModel(nn.Module):
         pred = pred.view(-1)
         label = label.view(-1)
         pred, label = self.__delete_ignore_index(pred, label)
+        label = label.to(pred.device)
         fp = torch.sum(((pred > 0) & (label == 0)).type(torch.FloatTensor))
         fn = torch.sum(((pred == 0) & (label > 0)).type(torch.FloatTensor))
         pred = pred.cpu().numpy().tolist()
@@ -353,11 +354,12 @@ class FewShotNERFramework:
         print('[INFO] Use BERT optim!')
         parameters_to_optimize = list(model.named_parameters())
         no_decay = ['bias', 'LayerNorm.bias', 'LayerNorm.weight']
+        
         parameters_to_optimize = [
             {'params': [p for n, p in parameters_to_optimize 
-                if not any(nd in n for nd in no_decay)], 'weight_decay': 0.01},
+                if not any(nd in n for nd in no_decay) and ('word_encoder' not in n)], 'weight_decay': 0.01},
             {'params': [p for n, p in parameters_to_optimize
-                if any(nd in n for nd in no_decay)], 'weight_decay': 0.0}
+                if any(nd in n for nd in no_decay) and ('word_encoder' not in n)], 'weight_decay': 0.0}
         ]
         if use_sgd_for_bert:
             optimizer = torch.optim.SGD(parameters_to_optimize, lr=learning_rate)
@@ -393,7 +395,9 @@ class FewShotNERFramework:
         it = 0
         while it + 1 < train_iter:
             for _, (support, query) in enumerate(self.train_data_loader):
-                label = torch.cat(query['label'], 0)
+                #label = torch.cat(query['label'], 0)
+                s_label = torch.cat(support['label'], 0)
+                label = torch.cat([s_label[s_label != -1], torch.cat(query['label'], 0)], 0)
                 if torch.cuda.is_available():
                     for k in support:
                         if k != 'label' and k != 'sentence_num':
@@ -405,6 +409,9 @@ class FewShotNERFramework:
                 loss = model.loss(logits, label) / float(grad_iter)
                 if ot_cost is not None:
                     loss += ot_cost
+                
+                pred = pred[len(s_label):]
+                label = label[len(s_label):]
                 tmp_pred_cnt, tmp_label_cnt, correct = model.metrics_by_entity(pred, label)
                     
                 if fp16:
@@ -524,7 +531,10 @@ class FewShotNERFramework:
             it = 0
             while it + 1 < eval_iter:
                 for _, (support, query) in enumerate(eval_dataset):
-                    label = torch.cat(query['label'], 0)
+                    #label = torch.cat(query['label'], 0)
+                    s_label = torch.cat(support['label'], 0)
+                    s_label = s_label[s_label != -1]
+                    label = torch.cat([s_label, torch.cat(query['label'], 0)], 0)
                     if torch.cuda.is_available():
                         for k in support:
                             if k != 'label' and k != 'sentence_num':
@@ -532,6 +542,12 @@ class FewShotNERFramework:
                                 query[k] = query[k].cuda()
                         label = label.cuda()
                     logits, pred, ot_cost, proto, embs = model(support, query)
+                    
+                    # only get query prediction
+                    pred = pred[len(s_label):]
+                    label = label[len(s_label):]
+                    """
+                    Vis. part
                     if plot and (torch.randint(low=1, high=100, size=(1,)).item() % 5 == 0):
                         # plot embedding per each batch
                         prev_num_sent = 0
@@ -585,7 +601,7 @@ class FewShotNERFramework:
                                 ax.annotate([str(proto_name) for proto_name in curr_tag.values()][idx],  xy=(x - 0.05, y - 0.05))
                             plt.savefig(f'./plot/query_it_{str(it).zfill(5)}_batch_{str(batch_idx).zfill(2)}.png')
                             plt.close()
-                        
+                    """
                     if self.viterbi:
                         pred = self.viterbi_decode(logits, query['label'])
 
