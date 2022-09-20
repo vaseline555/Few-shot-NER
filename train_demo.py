@@ -9,6 +9,7 @@ from model.saca import SaCaProto
 from model.gnn import GraphProto
 from model.oauproto import OAuProto
 from model.twingnn import TwinGNN
+from model.graphOT import GraphOT
 
 import sys
 import torch
@@ -177,6 +178,10 @@ def main():
     elif model_name == 'twingnn':
         print('[INFO] ...use Twin GNN!')
         model = TwinGNN(word_encoder, dot=opt.dot, ignore_index=opt.ignore_index)
+        framework = FewShotNERFramework(train_data_loader, val_data_loader, test_data_loader, use_sampled_data=opt.use_sampled_data)
+    elif model_name == 'got':
+        print('[INFO] ...use Optimal Transport for Graph Clustering!')
+        model = GraphOT(word_encoder, dot=opt.dot, ignore_index=opt.ignore_index)
         framework = FewShotNERFramework(train_data_loader, val_data_loader, test_data_loader, use_sampled_data=opt.use_sampled_data)
     else:
         raise NotImplementedError

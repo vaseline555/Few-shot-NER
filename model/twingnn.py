@@ -24,30 +24,13 @@ class TwinGNN(util.framework.FewShotNERModel):
         # embedding dimension
         self.embedding_dim = 768
         
-        # for self attention
-        self.ln_s = nn.LayerNorm(self.embedding_dim)
-        
-        self.to_ks = nn.Linear(self.embedding_dim, self.embedding_dim , bias=False)
-        self.to_vs = nn.Linear(self.embedding_dim, self.embedding_dim , bias=False)
-        self.to_qs = nn.Linear(self.embedding_dim, self.embedding_dim, bias=False)
-        
-        self.mhas = nn.MultiheadAttention(embed_dim=self.embedding_dim, num_heads=16, batch_first=True)
-        
-        # for cross attention
-        self.ln_q = nn.LayerNorm(self.embedding_dim)
-        
-        self.to_kq = nn.Linear(self.embedding_dim, self.embedding_dim, bias=False)
-        self.to_vq = nn.Linear(self.embedding_dim, self.embedding_dim, bias=False)
-        self.to_qq = nn.Linear(self.embedding_dim, self.embedding_dim, bias=False)
-        
-        self.mhaq = nn.MultiheadAttention(embed_dim=self.embedding_dim, num_heads=16, batch_first=True)
-        
         # graph configurations
         self.K = 5
         self.p = 0.2
         
         # graph layer
-        self.task_gconv = dgl.nn.pytorch.conv.GraphConv(self.embedding_dim, self.embedding_dim)        
+        self.task_gconv = dgl.nn.pytorch.conv.GraphConv(self.embedding_dim, self.embedding_dim) 
+        
         self.span_gconv = dgl.nn.pytorch.conv.GraphConv(self.embedding_dim, self.embedding_dim)
         
         # projection layer
@@ -69,14 +52,13 @@ class TwinGNN(util.framework.FewShotNERModel):
         dist = self.__dist__(S.unsqueeze(0), Q.unsqueeze(1), 2)
         return dist
     
-    def __get_nearest_dist__(self, S, s_label, Q):
-        nearest_dist = []
-        dist = self.__batch_dist__(S, Q) # [num_of_query_tokens, num_of_support_tokens]
-        for label in range(torch.max(s_label).long() + 1):
-            nearest_dist.append(torch.max(dist[:, s_label == label], 1)[0])
-        nearest_dist = torch.stack(nearest_dist, dim=1) # [num_of_query_tokens, class_num]
-        return nearest_dist
-    
+    def __get_proto__(self, emb, label):
+        proto = []
+        for l in torch.unique(label):
+            proto.append(torch.mean(emb[label == l], 0))
+        proto = torch.stack(proto)
+        return proto
+
     def FKT(self, X, y, n_components):
         X1, X2 = X[y == 0], X[y != 0]
         m, m1, m2 = X.mean(0), X1.mean(0), X2.mean(0)
@@ -91,27 +73,6 @@ class TwinGNN(util.framework.FewShotNERModel):
         proj_F = Q @ V
         return proj_F[:, :n_components]
     
-    def __get_embeddings__(self, embedding, tag, mask):
-        embs, labels = [], []
-        embedding = embedding[mask==1].view(-1, embedding.size(-1))
-        if tag is not None:
-            tag = torch.cat(tag, 0)
-            assert tag.size(0) == embedding.size(0)
-            for label in range(torch.max(tag) + 1):
-                curr_emb = embedding[tag == label]
-                embs.append(curr_emb)
-                labels.append(torch.ones(len(curr_emb)).mul(label).to(curr_emb.device))
-        else:
-            return embedding
-        return torch.cat(embs), torch.cat(labels)
-    
-    def __get_proto__(self, emb, label):
-        proto = []
-        for l in torch.unique(label):
-            proto.append(torch.mean(emb[label == l], 0))
-        proto = torch.stack(proto)
-        return proto
-    
     def forward(self, support, query):
         '''
         support: Inputs of the support set.
@@ -120,8 +81,8 @@ class TwinGNN(util.framework.FewShotNERModel):
         K: Num of instances for each class in the support set
         Q: Num of instances in the query set
         '''
-        support_emb = self.word_encoder(support['word'], support['mask'])#.detach() # [num_sent, number_of_tokens, 768]
-        query_emb = self.word_encoder(query['word'], query['mask'])#.detach() # [num_sent, number_of_tokens, 768]
+        support_emb = self.word_encoder(support['word'], support['mask']).detach() # [num_sent, number_of_tokens, 768]
+        query_emb = self.word_encoder(query['word'], query['mask']).detach() # [num_sent, number_of_tokens, 768]
         support_emb = self.drop(support_emb)
         query_emb = self.drop(query_emb)
         
@@ -142,108 +103,59 @@ class TwinGNN(util.framework.FewShotNERModel):
             s_emb = support_emb[current_support_num:current_support_num+sent_support_num]
             s_label = support['label'][current_support_num:current_support_num+sent_support_num]
             s_mask = support['text_mask'][current_support_num:current_support_num+sent_support_num]
-            s_emb_selected, s_label_selected = self.__get_embeddings__(
-                s_emb,
-                s_label,
-                s_mask
-            )
             
             # Get query embeddings
             q_emb = query_emb[current_query_num:current_query_num+sent_query_num]
             q_mask = query['text_mask'][current_query_num:current_query_num+sent_query_num]
-            q_emb_selected = self.__get_embeddings__(
-                q_emb,
-                None,
-                q_mask
-            )
-           
-            s_emb_selected = torch.nn.functional.normalize(s_emb_selected, p=2, dim=1)
-            q_emb_selected = torch.nn.functional.normalize(q_emb_selected, p=2, dim=1)
-               
 
-            
-            
-            # 2) Span graph construction
-            ## construct edges
-            s_src = torch.arange(len(s_label_selected)).to(s_label_selected.device).add(2) # 2 for 0 and 1
-            s_dst = s_label_selected.clone()
-            s_dst[s_dst != 0] = 1
+            # Pre-process embeddings, masks, labels
+            ## support set
+            s_label = torch.cat(s_label)
+            s_emb = s_emb[s_mask == 1][s_label != -1]
+            s_label = s_label[s_label != -1]
 
-            q_src = torch.arange(len(q_emb_selected)).to(s_label_selected.device).add(len(s_label_selected)).add(2)
-            q_dst = self.__get_nearest_dist__(s_emb_selected, s_dst, q_emb_selected).max(1)[-1]
-            
-            ## convert into DGL data structure 
-            graph = dgl.graph((torch.cat([torch.tensor([0, 1]).to(s_src.device), s_src, q_src]).tolist(), torch.cat([torch.tensor([1, 0]).to(s_src.device), s_dst, q_dst]).tolist())).to(s_emb.device)
-            graph = dgl.add_self_loop(graph)
+            ## query set
+            q_emb = q_emb[q_mask == 1]
 
-            graph.ndata['feat'] = torch.cat(
-                [
-                    torch.cat(
-                        [
-                            s_emb_selected[s_label_selected == 0],
-                            q_emb_selected[q_dst == 0]
-                        ], 0
-                    ).mean(0, keepdim=True), 
-                    torch.cat(
-                        [
-                            s_emb_selected[s_label_selected == 1],
-                            q_emb_selected[q_dst == 1]
-                        ], 0
-                    ).mean(0, keepdim=True), 
-                    s_emb_selected, 
-                    q_emb_selected
-                ], 0
-            )
-            graph = dgl.to_homogeneous(graph, ndata=['feat'])
-            span_embs = self.drop(self.span_gconv(graph, torch.cat(
-                [
-                    torch.cat(
-                        [
-                            s_emb_selected[s_label_selected == 0],
-                            q_emb_selected[q_dst == 0]
-                        ], 0
-                    ).mean(0, keepdim=True), 
-                    torch.cat(
-                        [
-                            s_emb_selected[s_label_selected == 1],
-                            q_emb_selected[q_dst == 1]
-                        ], 0
-                    ).mean(0, keepdim=True), 
-                    s_emb_selected, 
-                    q_emb_selected
-                ], 0
-            )))[2:]
-            s_emb_selected = span_embs[:len(s_emb_selected)]
-            q_emb_selected = span_embs[len(s_emb_selected):]
-            
-            
+            ## normalize
+            s_emb = torch.nn.functional.normalize(s_emb, p=2, dim=1)
+            q_emb = torch.nn.functional.normalize(q_emb, p=2, dim=1)
+
+            # Concatenate embeddings for transductive setting
+            embs = torch.cat([s_emb, q_emb], 0)
+
+            # Task embedding
+            sq_adj = embs.unsqueeze(1).sub(embs.unsqueeze(0)).pow(2).mean(2).mul(-1).div(2).exp()   # N*N*d -> N*N
+            topk, indices = torch.topk(sq_adj, self.K)
+            mask = torch.zeros_like(sq_adj)
+            mask = mask.scatter(1, indices, 1)
+            mask = ((mask + torch.t(mask)) > 0).float()      # union, kNN graph
+            sq_adj = sq_adj * mask.to(sq_adj.device)
+            sq_graph = dgl.graph(torch.nonzero(sq_adj, as_tuple=True))
+            span_embs = self.span_gconv(sq_graph, embs, edge_weight=sq_adj[torch.nonzero(sq_adj, as_tuple=True)])        
+            s_emb = span_embs[:len(s_emb)]
+            q_emb = span_embs[len(s_emb):]
             # 잘되면 FKT 추가 후 성능비교
             
-            """
-            # 3) Task graph construction
-            ms = MeanShift(bandwidth=1).fit(s_emb_selected.detach().cpu().numpy())
-            clustered_labels = ms.predict(q_emb_selected.detach().cpu().numpy())
+            
+            # Class embedding
+            support_proto = self.__get_proto__(s_emb, s_label)
+            s_src = torch.arange(len(torch.unique(s_label)) + len(s_label)).to(s_label.device)
+            s_dst = torch.cat([torch.arange(len(torch.unique(s_label))).to(s_label.device), s_label], 0)
+            
+            q_src = torch.arange(len(q_emb)).to(s_src.device).add(len(s_src)).repeat(len(torch.unique(s_label)))
+            q_dst = torch.unique(s_label).to(s_label.device).view(-1, 1).repeat(1, len(q_emb)).view(-1)
 
-            s_src = torch.arange(len(s_label_selected)).to(s_label_selected.device).add(len(ms.cluster_centers_))
-            s_dst = torch.tensor(ms.predict(s_emb_selected.detach().cpu().numpy())).to(s_label_selected.device)
-            
-            q_src = torch.arange(len(q_emb_selected)).to(s_label_selected.device).add(len(s_dst)).add(len(ms.cluster_centers_))
-            q_dst = torch.tensor(ms.predict(q_emb_selected.detach().cpu().numpy())).to(s_label_selected.device)
-            
             ## convert into DGL data structure
-            graph = dgl.graph((torch.cat([torch.arange(len(ms.cluster_centers_)).to(s_src.device), s_src, q_src]).tolist(), torch.cat([torch.arange(len(ms.cluster_centers_)).to(s_src.device),s_dst, q_dst]).tolist())).to(s_emb.device)
-            graph = dgl.add_self_loop(graph)
-            
-            graph.ndata['feat'] = torch.cat([torch.tensor(ms.cluster_centers_).to(s_emb.device), s_emb_selected, q_emb_selected], 0)
-            graph = dgl.to_homogeneous(graph, ndata=['feat'])
-            task_embs = self.drop(self.task_gconv(graph, torch.cat([torch.tensor(ms.cluster_centers_).to(s_emb.device), s_emb_selected, q_emb_selected], 0)))[len(ms.cluster_centers_):]
-            """
-            
+            task_graph = dgl.graph((torch.cat([s_src, q_src]).tolist(), torch.cat([s_dst, q_dst]).tolist())).to(s_emb.device)
+            task_graph = dgl.add_self_loop(task_graph)
+            task_embs = self.task_gconv(task_graph, torch.cat([support_proto, embs], 0))
+            task_proto = task_embs[:len(support_proto)]
+            q_emb = task_embs[len(support_proto) + len(s_emb):]
                                                  
             # 4) Merge embeddings
-            #logit = self.proj(F.relu(torch.cat([span_embs, task_embs], 1)))[len(s_emb_selected):]
-            support_proto = self.__get_proto__(s_emb_selected, s_label_selected)
-            logit = self.__batch_dist__(support_proto, q_emb_selected)
+            #logit = self.proj(F.relu(torch.cat([span_embs, task_embs], 1)))[len(s_emb):]
+            logit = self.__batch_dist__(task_proto, q_emb)
               
             logits.append(logit)
             current_query_num += sent_query_num

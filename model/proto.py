@@ -59,6 +59,7 @@ class Proto(util.framework.FewShotNERModel):
 
         for i, sent_support_num in enumerate(support['sentence_num']):
             sent_query_num = query['sentence_num'][i]
+            import pdb; pdb.set_trace()
             # Calculate prototype for each class
             support_proto = self.__get_proto__(
                 support_emb[current_support_num:current_support_num+sent_support_num], 

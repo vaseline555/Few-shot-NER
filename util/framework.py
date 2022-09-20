@@ -355,9 +355,9 @@ class FewShotNERFramework:
         no_decay = ['bias', 'LayerNorm.bias', 'LayerNorm.weight']
         parameters_to_optimize = [
             {'params': [p for n, p in parameters_to_optimize 
-                if not any(nd in n for nd in no_decay)], 'weight_decay': 0.01},
+                if not any(nd in n for nd in no_decay) and 'word_encoder' not in n], 'weight_decay': 0.01},
             {'params': [p for n, p in parameters_to_optimize
-                if any(nd in n for nd in no_decay)], 'weight_decay': 0.0}
+                if any(nd in n for nd in no_decay) and 'word_encoder' not in n], 'weight_decay': 0.0}
         ]
         if use_sgd_for_bert:
             optimizer = torch.optim.SGD(parameters_to_optimize, lr=learning_rate)

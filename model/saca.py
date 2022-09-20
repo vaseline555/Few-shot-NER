@@ -12,6 +12,7 @@ from torch.nn import functional as F
 
 import ot
 from ot.gromov import gromov_wasserstein2
+from sklearn.linear_model import LogisticRegression as LR
 
 class HLoss(nn.Module):
     def __init__(self):
@@ -147,7 +148,7 @@ class SaCaProto(util.framework.FewShotNERModel):
             
             
             
-                                 
+            """  
             # 1) Self-Attention & Cross-Attention
             # Get query, key, and value for self-attention
             Q, K, V = self.to_qs(s_emb_selected), self.to_ks(s_emb_selected), self.to_vs(s_emb_selected)
@@ -184,7 +185,25 @@ class SaCaProto(util.framework.FewShotNERModel):
                 a0.grad.zero_()
                 a0.data = ot.utils.proj_simplex(a0)
             logit = ot.gromov_wasserstein(adj_dense, adj_prior, ot.unif(len(embs)), a0)
+            """
+            clf = LR().fit(s_emb_selected.detach().cpu().numpy(), (s_label_selected != 0).long().detach().cpu().numpy())
+            q_span_pred = torch.from_numpy(clf.predict(q_emb_selected.detach().cpu().numpy())).to(q_emb_selected.device)
             
+            logit = torch.empty(len(q_emb_selected), len(torch.unique(s_label_selected))).to(q_emb_selected.device)
+            s_label_span = (s_label_selected != 0).long()
+
+            #import pdb;pdb.set_trace()
+            proto_O = s_emb_selected[s_label_span == 0].mean(0, keepdim=True)
+            logit_O = self.__batch_dist__(proto_O, q_emb_selected[q_span_pred == 0])
+            logit_O = logit_O.repeat(1, len(torch.unique(s_label_selected)))
+            logit_O[:, 1:] = logit_O[:, 1:] - 1
+
+            proto_entity = self.__get_proto__(s_emb_selected[s_label_span != 0], s_label_selected[s_label_span != 0])
+            logit_entity = self.__batch_dist__(proto_entity, q_emb_selected[q_span_pred != 0])
+            logit_entity = torch.cat([logit_entity.min(1, keepdim=True)[0].sub(1), logit_entity], 1)
+            
+            logit[q_span_pred == 0] = logit_O
+            logit[q_span_pred == 1] = logit_entity
             
             
             logits.append(logit)
